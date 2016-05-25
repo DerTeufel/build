@@ -332,7 +332,7 @@ ifneq (,$(user_variant))
     ifeq ($(user_variant),user)
       ifeq ($(HOST_OS),linux)
         # TODO: turn on WITH_DEXPREOPT for libart user builds.
-        # WITH_DEXPREOPT := true
+	WITH_DEXPREOPT := true
       endif
     endif
   endif

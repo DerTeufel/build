@@ -95,8 +95,44 @@ ifeq ($(TARGET_USERIMAGES_USE_EXT4),true)
 customimage_intermediates := \
     $(call intermediates-dir-for,PACKAGING,custom)
 
+define copytoout
+cp -rpf $(1) $(2)
+endef
+
+ifeq ($(strip $(ADUPS_FOTA_SUPPORT)), yes)
+## with fota
+define appendcustprop
+echo "appendcustprop";\
+$(if $(BUILD_DISPLAY_ID),echo "ro.build.display.id=$(BUILD_DISPLAY_ID)" >> $(1),echo "");\
+$(if $(INTERNAL_BUILD_VERNO),echo "ro.internal.build.version=$(INTERNAL_BUILD_VERNO)" >> $(1),echo "");\
+$(if $(CUSTOM_BUILD_VERNO),echo "ro.custom.build.version=$(CUSTOM_BUILD_VERNO)" >> $(1),echo "");\
+$(if $(FOTA_DEV),echo "ro.fota.device=$(FOTA_DEV)" >> $(1),echo "");\
+$(if $(FOTA_VER),echo "ro.fota.version=$(FOTA_VER)" >> $(1),echo "")
+endef
+else
+## without fota
+define appendcustprop
+echo "appendcustprop";\
+$(if $(BUILD_DISPLAY_ID),echo "ro.build.display.id=$(BUILD_DISPLAY_ID)" >> $(1),echo "");\
+$(if $(INTERNAL_BUILD_VERNO),echo "ro.internal.build.version=$(INTERNAL_BUILD_VERNO)" >> $(1),echo "");\
+$(if $(CUSTOM_BUILD_VERNO),echo "ro.custom.build.version=$(CUSTOM_BUILD_VERNO)" >> $(1),echo "")
+endef
+endif
+
+CUSTOM_NAME ?= default
+CUSTOM_SRC_DIR := custom/$(CUSTOM_NAME)/out
+CUSTOM_SRC_FILES :=
+CUSTOM_PROP_FILE := $(TARGET_CUSTOM_OUT)/customprop/custom.prop
+include custom/custom.mk
+
 ## Generate an ext4 image
 define build-customimage-target
+    rm -rf $(TARGET_CUSTOM_OUT)/etc
+    rm -rf $(TARGET_CUSTOM_OUT)/media
+    rm -rf $(TARGET_CUSTOM_OUT)/app-res
+    rm -rf $(TARGET_CUSTOM_OUT)/app_unremoveable
+    rm -rf $(TARGET_CUSTOM_OUT)/bootani
+    rm -rf $(TARGET_CUSTOM_OUT)/customprop
     mkdir -p $(TARGET_CUSTOM_OUT)
     mkdir -p $(TARGET_CUSTOM_OUT)/lib
     mkdir -p $(TARGET_CUSTOM_OUT)/lib64
@@ -105,6 +141,8 @@ define build-customimage-target
     mkdir -p $(TARGET_CUSTOM_OUT)/plugin
     mkdir -p $(TARGET_CUSTOM_OUT)/media
     mkdir -p $(TARGET_CUSTOM_OUT)/etc
+    if [ -d $(CUSTOM_SRC_DIR) ]; then $(call copytoout,$(CUSTOM_SRC_DIR)/*,$(TARGET_CUSTOM_OUT)); fi 
+    if [ -f $(CUSTOM_PROP_FILE) ]; then $(call appendcustprop,$(CUSTOM_PROP_FILE)); fi
     mkuserimg.sh -s $(PRODUCT_OUT)/custom $(PRODUCT_OUT)/custom.img ext4 custom $(strip $(BOARD_CUSTOMIMAGE_PARTITION_SIZE)) $(PRODUCT_OUT)/root/file_contexts
 endef
 
@@ -112,7 +150,7 @@ INSTALLED_CUSTOMIMAGE_TARGET := $(PRODUCT_OUT)/custom.img
 
 INTERNAL_CUSTOMIMAGE_FILES := $(filter $(TARGET_CUSTOM_OUT)/%,$(ALL_PREBUILT) $(ALL_COPIED_HEADERS) $(ALL_GENERATED_SOURCES) $(ALL_DEFAULT_INSTALLED_MODULES) $(INSTALLED_BUILD_CIP_PROP_TARGET))
 
-$(INSTALLED_CUSTOMIMAGE_TARGET) : $(INTERNAL_USERIMAGES_DEPS) $(INTERNAL_CUSTOMIMAGE_FILES)
+$(INSTALLED_CUSTOMIMAGE_TARGET) : $(INTERNAL_USERIMAGES_DEPS) $(INTERNAL_CUSTOMIMAGE_FILES) $(CUSTOM_ALL_RELATE_FILES)
 	$(build-customimage-target)
 
 ifeq ($(strip $(MTK_CIP_SUPPORT)),yes)
@@ -139,7 +177,7 @@ clean-customimage:
 endif
 
 .PHONY: customimage
-customimage: $(INTERNAL_USERIMAGES_DEPS) $(INTERNAL_CUSTOMIMAGE_FILES)
+customimage: $(INTERNAL_USERIMAGES_DEPS) $(INTERNAL_CUSTOMIMAGE_FILES) $(CUSTOM_ALL_RELATE_FILES)
 	$(build-customimage-target)
 
 .PHONY: all_customimage
