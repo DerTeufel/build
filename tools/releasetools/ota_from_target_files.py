@@ -62,6 +62,14 @@ Usage:  ota_from_target_files [flags] input_target_files output_ota_package
   -e  (--extra_script)  <file>
       Insert the contents of file at the end of the update script.
 
+  #adupsfota begin
+  -l  (--logo)  <file>
+      Specify 'logo.img' to upgrade.
+
+  -u  (--uboot)  <file>
+      Specify 'uboot.img/lk.img' to upgrade.
+  #adupsfota end
+
   -a  (--aslr_mode)  <on|off>
       Specify whether to turn on ASLR for the package (on by default).
 
@@ -105,7 +113,9 @@ OPTIONS = common.OPTIONS
 OPTIONS.package_key = None
 OPTIONS.incremental_source = None
 OPTIONS.verify = False
-OPTIONS.require_verbatim = set()
+#adupsfota begin
+OPTIONS.require_verbatim = set(("system/bin/install-recovery.sh","system/recovery-from-boot.p","system/etc/recovery-resource.dat",))
+#adupsfota end
 OPTIONS.prohibit_verbatim = set(("system/build.prop",))
 OPTIONS.patch_threshold = 0.95
 OPTIONS.wipe_user_data = False
@@ -117,10 +127,16 @@ if OPTIONS.worker_threads == 0:
   OPTIONS.worker_threads = 1
 OPTIONS.two_step = False
 OPTIONS.no_signing = False
-OPTIONS.block_based = False
+#adupsfota begin
+OPTIONS.block_based = True
+#adupsfota end
 OPTIONS.updater_binary = None
 OPTIONS.oem_source = None
 OPTIONS.fallback_to_full = True
+#adupsfota begin
+OPTIONS.uboot = None
+OPTIONS.logo = None
+#adupsfota end
 OPTIONS.full_radio = False
 OPTIONS.ubifs = False
 
@@ -509,6 +525,15 @@ def GetImage(which, tmpdir, info_dict):
 
   return sparse_img.SparseImage(path, mappath, clobbered_blocks)
 
+#adupsfota begin
+def WriteRawImage2(script, partition, fn):
+  """Write the given package file into the given MTD partition."""
+  script.AppendExtra(
+      ('assert(package_extract_file("%(fn)s", "/tmp/%(partition)s.img"),\n'
+       '       write_raw_image("/tmp/%(partition)s.img", "%(partition)s"),\n'
+       '       delete("/tmp/%(partition)s.img"));')
+      % {'partition': partition, 'fn': fn})
+#adupsfota end
 
 def WriteFullOTAPackage(input_zip, output_zip):
   # TODO: how to determine this?  We don't know what version it will
@@ -550,9 +575,13 @@ def WriteFullOTAPackage(input_zip, output_zip):
   if not OPTIONS.omit_prereq:
     ts = GetBuildProp("ro.build.date.utc", OPTIONS.info_dict)
     ts_text = GetBuildProp("ro.build.date", OPTIONS.info_dict)
-    script.AssertOlderBuild(ts, ts_text)
+    #adupsfota begin
+    #script.AssertOlderBuild(ts, ts_text)
+	#adupsfota end
 
-  AppendAssertions(script, OPTIONS.info_dict, oem_dict)
+  #adupsfota begin
+  #AppendAssertions(script, OPTIONS.info_dict, oem_dict)
+  #adupsfota end
   device_specific.FullOTA_Assertions()
 
   # Two-step package strategy (in chronological order, which is *not*
@@ -738,6 +767,21 @@ else if get_stage("%(bcb_dev)s") == "3/3" then
   script.ShowProgress(0.05, 5)
   script.WriteRawImage("/boot", "boot.img")
 
+  #adupsfota begin
+  if OPTIONS.uboot is not None or OPTIONS.logo is not None:
+    script.AppendExtra('assert(run_program(\"/system/bin/dd\", \"if=/dev/zero\", \"of=/proc/driver/mtd_writeable\", \"bs=3\", \"count=1\"));')
+
+  if OPTIONS.logo is not None:
+    logo_img = open(OPTIONS.logo).read()
+    common.ZipWriteStr(output_zip, "logo.img", logo_img)
+    WriteRawImage2(script, "logo", "logo.img")
+
+  if OPTIONS.uboot is not None:
+    uboot_img = open(OPTIONS.uboot).read()
+    common.ZipWriteStr(output_zip, "uboot.img", uboot_img)
+    WriteRawImage2(script, "lk", "uboot.img")
+  #adupsfota end
+
   script.ShowProgress(0.2, 10)
   device_specific.FullOTA_InstallEnd()
 
@@ -905,7 +949,9 @@ def WriteBlockIncrementalOTAPackage(target_zip, source_zip, output_zip):
     oem_dict = common.LoadDictionaryFromLines(
         open(OPTIONS.oem_source).readlines())
 
-  AppendAssertions(script, OPTIONS.target_info_dict, oem_dict)
+  #adupsfota begin
+  #AppendAssertions(script, OPTIONS.target_info_dict, oem_dict)
+  #adupsfota end
   device_specific.IncrementalOTA_Assertions()
 
   # Two-step incremental package strategy (in chronological order,
@@ -1180,6 +1226,14 @@ class FileDifference(object):
          if i not in self.target_data and i not in self.renames] +
         list(extras))
 
+  #adupsfota begin
+  def RemoveUnneededFolders(self, script):
+    #print self.source_data
+    for i in sorted(self.source_data):
+      if i not in self.target_data and i not in self.renames and i.endswith("/"):
+        script.AppendExtra(('delete_recursive("/%s");') % (i[0:len(i)-1]))
+  #adupsfota end
+
   def TotalPatchSize(self):
     return sum(i[1].size for i in self.patch_list)
 
@@ -1288,12 +1342,14 @@ def WriteIncrementalOTAPackage(target_zip, source_zip, output_zip):
   source_fp = CalculateFingerprint(oem_props, oem_dict,
                                    OPTIONS.source_info_dict)
 
-  if oem_props is None:
-    script.AssertSomeFingerprint(source_fp, target_fp)
-  else:
-    script.AssertSomeThumbprint(
-        GetBuildProp("ro.build.thumbprint", OPTIONS.target_info_dict),
-        GetBuildProp("ro.build.thumbprint", OPTIONS.source_info_dict))
+  #adupsfota begin
+  #if oem_props is None:
+    #script.AssertSomeFingerprint(source_fp, target_fp)
+  #else:
+    #script.AssertSomeThumbprint(
+        #GetBuildProp("ro.build.thumbprint", OPTIONS.target_info_dict),
+        #GetBuildProp("ro.build.thumbprint", OPTIONS.source_info_dict))
+  #adupsfota end
 
   metadata["pre-build"] = source_fp
   metadata["post-build"] = target_fp
@@ -1319,7 +1375,9 @@ def WriteIncrementalOTAPackage(target_zip, source_zip, output_zip):
   #  0.1 for unpacking verbatim files, symlinking, and doing the
   #      device-specific commands.
 
-  AppendAssertions(script, OPTIONS.target_info_dict, oem_dict)
+  #adupsfota begin
+  #AppendAssertions(script, OPTIONS.target_info_dict, oem_dict)
+  #adupsfota end
   device_specific.IncrementalOTA_Assertions()
 
   # Two-step incremental package strategy (in chronological order,
@@ -1603,6 +1661,21 @@ else
   # permissions.
   script.AppendScript(temp_script)
 
+  #adupsfota begin
+  if OPTIONS.uboot is not None or OPTIONS.logo is not None:
+    script.AppendExtra('assert(run_program(\"/system/bin/dd\", \"if=/dev/zero\", \"of=/proc/driver/mtd_writeable\", \"bs=3\", \"count=1\"));')
+
+  if OPTIONS.logo is not None:
+    logo_img = open(OPTIONS.logo).read()
+    common.ZipWriteStr(output_zip, "logo.img", logo_img)
+    WriteRawImage2(script, "logo", "logo.img")
+
+  if OPTIONS.uboot is not None:
+    uboot_img = open(OPTIONS.uboot).read()
+    common.ZipWriteStr(output_zip, "uboot.img", uboot_img)
+    WriteRawImage2(script, "lk", "uboot.img")
+  #adupsfota end
+
   # Do device-specific installation (eg, write radio image).
   device_specific.IncrementalOTA_InstallEnd()
 
@@ -1637,6 +1710,11 @@ endif;
     script.Unmount("/vendor")
     script.Mount("/vendor")
     vendor_diff.EmitExplicitTargetVerification(script)
+
+  #adupsfota begin
+  system_diff.RemoveUnneededFolders(script)
+  #adupsfota end
+
   script.AddToZip(target_zip, output_zip, input_path=OPTIONS.updater_binary)
 
   WriteMetadata(metadata, output_zip)
@@ -1649,6 +1727,12 @@ def main(argv):
       pass   # deprecated
     elif o in ("-k", "--package_key"):
       OPTIONS.package_key = a
+    #adupsfota begin
+    elif o in ("-l", "--logo"):
+      OPTIONS.logo = a
+    elif o in ("-u", "--uboot"):
+      OPTIONS.uboot = a
+    #adupsfota end
     elif o in ("-i", "--incremental_from"):
       OPTIONS.incremental_source = a
     elif o == "--full_radio":
@@ -1691,7 +1775,9 @@ def main(argv):
     return True
 
   args = common.ParseOptions(argv, __doc__,
-                             extra_opts="b:k:i:d:wgne:t:a:2o:",
+                             #adupsfota begin
+                             extra_opts="b:k:l:u:i:d:wgne:t:a:2o:",
+                             #adupsfota end
                              extra_long_opts=[
                                  "board_config=",
                                  "package_key=",
@@ -1701,6 +1787,10 @@ def main(argv):
                                  "ubifs",
                                  "no_prereq",
                                  "extra_script=",
+                                 #adupsfota begin
+                                 "logo=",
+                                 "uboot=",
+                                 #adupsfota end
                                  "worker_threads=",
                                  "aslr_mode=",
                                  "two_step",

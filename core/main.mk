@@ -970,6 +970,7 @@ else # TARGET_BUILD_APPS
 
 # Building a full system-- the default is to build droidcore
 droid: droidcore dist_files
+$(if $(filter yes,$(ADUPS_FOTA_SUPPORT)), droid: img-target-files)
 
 endif # TARGET_BUILD_APPS
 

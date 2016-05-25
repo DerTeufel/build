@@ -168,6 +168,7 @@ else
   # Non-user builds should show detailed build information
   BUILD_DISPLAY_ID := $(build_desc)
 endif
+BUILD_DISPLAY_ID := $(MTK_BUILD_VERNO)
 
 # Accepts a whitespace separated list of product locales such as
 # (en_US en_AU en_GB...) and returns the first locale in the list with
@@ -177,6 +178,11 @@ define get-default-product-locale
 $(strip $(subst _,-, $(firstword $(1))))
 endef
 
+#adups fota start
+ifeq ($(strip $(ADUPS_FOTA_SUPPORT)), yes)
+FOTA_SH := packages/apps/AdupsFotaApp/FotaInfo.sh
+endif
+#adups fota end
 BUILDINFO_SH := build/tools/buildinfo.sh
 
 ifdef TARGET_SYSTEM_PROP
@@ -251,6 +257,14 @@ endif
 ifeq ($(strip $(MTK_CIP_SUPPORT)),yes)
 	$(hide) echo "import /custom/cip-build.prop" >> $@;
 endif
+
+#adups fota start
+ifeq ($(strip $(ADUPS_FOTA_SUPPORT)), yes)
+	@echo "Target FotaInfo: $@"
+	$(hide) chmod 777 $(FOTA_SH)
+	bash $(FOTA_SH) $@ >> $@
+endif
+#adups fota end
 
 build_desc :=
 
@@ -1783,7 +1797,7 @@ endif
 	@# sign image used to get boot and recovery sig files
 	$(hide) $(SHELL) $(SECURITY_SIG_TOOL)
 	@#prepare image and update list for OTA upgrade used
-	$(hide) ./device/mediatek/build/releasetools/mt_ota_preprocess.py $(zip_root) $(PRODUCT_OUT) $(PRODUCT_OUT)/ota_update_list.txt
+	$(hide) MTK_LOADER_UPDATE=yes MTK_PRELOADER_OTA_BACKUP=no ./device/mediatek/build/releasetools/mt_ota_preprocess.py $(zip_root) $(PRODUCT_OUT) $(PRODUCT_OUT)/ota_update_list.txt
 
 	$(hide) PATH=$(foreach p,$(INTERNAL_USERIMAGES_BINARY_PATHS),$(p):)$$PATH MKBOOTIMG=$(MKBOOTIMG) \
 	    ./build/tools/releasetools/make_recovery_patch $(zip_root) $(zip_root)
@@ -1808,6 +1822,110 @@ target-files-package: $(BUILT_TARGET_FILES_PACKAGE)
 
 ifneq ($(filter $(MAKECMDGOALS),target-files-package),)
 $(call dist-for-goals, target-files-package, $(BUILT_TARGET_FILES_PACKAGE))
+endif
+
+ifeq ($(strip $(ADUPS_FOTA_SUPPORT)), yes)
+
+img-target-files: PRIVATE_OTA_TOOLS := $(built_ota_tools)
+img-target-files: PRIVATE_RECOVERY_API_VERSION := $(RECOVERY_API_VERSION)
+img-target-files: PRIVATE_RECOVERY_FSTAB_VERSION := $(RECOVERY_FSTAB_VERSION)
+ifeq ($(TARGET_RELEASETOOLS_EXTENSIONS),)
+# default to common dir for device vendor
+img-target-files: tool_extensions := $(TARGET_DEVICE_DIR)/../common
+else
+img-target-files: tool_extensions := $(TARGET_RELEASETOOLS_EXTENSIONS)
+endif
+img-target-files: zip_root := $(PRODUCT_OUT)/img-target-files
+img-target-files: PRIVATE_KEY_CERT_PAIR := $(DEFAULT_KEY_CERT_PAIR)
+img-target-files: PRIVATE_OTA_TYPE := IMG
+
+img-target-files: \
+		droidcore \
+		$(INSTALLED_ANDROID_INFO_TXT_TARGET) \
+		$(SELINUX_FC) \
+		$(built_ota_tools) \
+		$(APKCERTS_FILE) \
+		$(HOST_OUT_EXECUTABLES)/fs_config \
+		| $(ACP)
+	$(hide) rm -rf $@ $(zip_root)
+	@# Extra contents of the OTA package
+	$(hide) mkdir -p $(zip_root)/OTA/bin
+	$(hide) $(ACP) $(INSTALLED_ANDROID_INFO_TXT_TARGET) $(zip_root)/OTA/
+	$(hide) $(ACP) $(PRIVATE_OTA_TOOLS) $(zip_root)/OTA/bin/
+	@# Security information of the OTA package
+	@echo "[SEC OTA] Adding Security information to OTA package"
+	@echo "[SEC OTA] path : vendor/mediatek/proprietary/custom/$(MTK_BASE_PROJECT)/security/recovery/SEC_VER.txt"
+	$(hide) $(ACP) vendor/mediatek/proprietary/custom/$(MTK_BASE_PROJECT)/security/recovery/SEC_VER.txt $(zip_root)/OTA/
+	-$(hide) $(ACP) $(PRODUCT_OUT)/trustzone.bin $(zip_root)/OTA/
+	@# Files that do not end up in any images, but are necessary to
+	@# build them.
+	$(hide) mkdir -p $(zip_root)/META
+	$(hide) $(ACP) $(APKCERTS_FILE) $(zip_root)/META/apkcerts.txt
+	$(hide) if test -e $(tool_extensions)/releasetools.py; then $(ACP) $(tool_extensions)/releasetools.py $(zip_root)/META/; fi
+	$(hide) echo "$(PRODUCT_OTA_PUBLIC_KEYS)" > $(zip_root)/META/otakeys.txt
+	$(hide) echo "recovery_api_version=$(PRIVATE_RECOVERY_API_VERSION)" > $(zip_root)/META/misc_info.txt
+	$(hide) echo "fstab_version=$(PRIVATE_RECOVERY_FSTAB_VERSION)" >> $(zip_root)/META/misc_info.txt
+ifdef BOARD_FLASH_BLOCK_SIZE
+	$(hide) echo "blocksize=$(BOARD_FLASH_BLOCK_SIZE)" >> $(zip_root)/META/misc_info.txt
+endif
+ifdef BOARD_BOOTIMAGE_PARTITION_SIZE
+	$(hide) echo "boot_size=$(BOARD_BOOTIMAGE_PARTITION_SIZE)" >> $(zip_root)/META/misc_info.txt
+endif
+ifdef BOARD_RECOVERYIMAGE_PARTITION_SIZE
+	$(hide) echo "recovery_size=$(BOARD_RECOVERYIMAGE_PARTITION_SIZE)" >> $(zip_root)/META/misc_info.txt
+endif
+ifdef BOARD_HAS_EXT4_RESERVED_BLOCKS
+	$(hide) echo "has_ext4_reserved_blocks=$(BOARD_HAS_EXT4_RESERVED_BLOCKS)" >> $(zip_root)/META/misc_info.txt
+endif
+ifdef TARGET_RECOVERY_FSTYPE_MOUNT_OPTIONS
+	@# TARGET_RECOVERY_FSTYPE_MOUNT_OPTIONS can be empty to indicate that nothing but defaults should be used.
+	$(hide) echo "recovery_mount_options=$(TARGET_RECOVERY_FSTYPE_MOUNT_OPTIONS)" >> $(zip_root)/META/misc_info.txt
+else
+	$(hide) echo "recovery_mount_options=$(DEFAULT_TARGET_RECOVERY_FSTYPE_MOUNT_OPTIONS)" >> $(zip_root)/META/misc_info.txt
+endif
+	$(hide) echo "tool_extensions=$(tool_extensions)" >> $(zip_root)/META/misc_info.txt
+	$(hide) echo "default_system_dev_certificate=$(DEFAULT_KEY_CERT_PAIR)" >> $(zip_root)/META/misc_info.txt
+ifdef PRODUCT_EXTRA_RECOVERY_KEYS
+	$(hide) echo "extra_recovery_keys=$(PRODUCT_EXTRA_RECOVERY_KEYS)" >> $(zip_root)/META/misc_info.txt
+endif
+	$(hide) echo 'mkbootimg_args=$(BOARD_MKBOOTIMG_ARGS)' >> $(zip_root)/META/misc_info.txt
+	$(hide) echo "use_set_metadata=1" >> $(zip_root)/META/misc_info.txt
+	$(hide) echo "multistage_support=1" >> $(zip_root)/META/misc_info.txt
+	$(hide) echo "update_rename_support=1" >> $(zip_root)/META/misc_info.txt
+	$(hide) echo "blockimgdiff_versions=1,2,3" >> $(zip_root)/META/misc_info.txt
+ifeq ($(MTK_HEADER_SUPPORT),yes)
+	$(hide) echo "mtk_header_support=1" >> $(zip_root)/META/misc_info.txt
+endif
+ifneq ($(OEM_THUMBPRINT_PROPERTIES),)
+	# OTA scripts are only interested in fingerprint related properties
+	$(hide) echo "oem_fingerprint_properties=$(OEM_THUMBPRINT_PROPERTIES)" >> $(zip_root)/META/misc_info.txt
+endif
+ifeq ($(TARGET_USERIMAGES_USE_UBIFS),true)
+	$(call generate-ubifs-prop-dictionary, $(zip_root)/META/misc_info.txt)
+endif
+	$(call generate-userimage-prop-dictionary, $(zip_root)/META/misc_info.txt)
+	$(hide) PATH=$(foreach p,$(INTERNAL_USERIMAGES_BINARY_PATHS),$(p):)$$PATH MKBOOTIMG=$(MKBOOTIMG) \
+	    ./build/tools/releasetools/make_recovery_patch $(zip_root) $(zip_root)
+	$(hide) mkdir -p $(zip_root)/SYSTEM/etc/
+
+	@# sign image used to get boot and recovery sig files
+	$(hide) $(SHELL) $(SECURITY_SIG_TOOL)
+	$(hide) cp $(PRODUCT_OUT)/sig/boot.sig $(zip_root)/META/
+	$(hide) cp $(PRODUCT_OUT)/sig/recovery.sig $(zip_root)/META/
+	$(hide) cp $(PRODUCT_OUT)/sig/recovery.sig $(zip_root)/SYSTEM/etc/
+	@#prepare image and update list for OTA upgrade used
+	$(hide) MTK_LOADER_UPDATE=yes MTK_PRELOADER_OTA_BACKUP=no ./device/mediatek/build/releasetools/mt_ota_preprocess.py $(zip_root) $(PRODUCT_OUT) $(PRODUCT_OUT)/ota_update_list.txt
+	@# Run fs_config on all the system, vendor, boot ramdisk,
+	@# and recovery ramdisk files in the zip, and save the output
+	(cd $(PRODUCT_OUT) && find system | while read f; do if [ -d $$f ]; then echo $$f"/"; else echo $$f; fi; done) | $(HOST_OUT_EXECUTABLES)/fs_config -C -D $(TARGET_OUT) -S $(SELINUX_FC) > $(zip_root)/META/filesystem_config.txt
+	(cd $(PRODUCT_OUT) && find vendor | while read f; do if [ -d $$f ]; then echo $$f"/"; else echo $$f; fi; done) | $(HOST_OUT_EXECUTABLES)/fs_config -C -D $(TARGET_OUT) -S $(SELINUX_FC) > $(zip_root)/META/vendor_filesystem_config.txt
+	(cd $(PRODUCT_OUT) && find custom | while read f; do if [ -d $$f ]; then echo $$f"/"; else echo $$f; fi; done) | $(HOST_OUT_EXECUTABLES)/fs_config -C -D $(TARGET_OUT) -S $(SELINUX_FC) > $(zip_root)/META/custom_filesystem_config.txt
+	@# Zip everything up, preserving symlinks
+	$(hide) (cd $(zip_root) && zip -qry ../$(notdir $(zip_root).zip) .)
+	bash ./packages/apps/AdupsFotaApp/getOtaPackage.sh $(PRODUCT_OUT) $(PRIVATE_KEY_CERT_PAIR) $(TARGET_DEVICE) $(HOST_LIBRARY_PATH) $(HOST_SHLIB_SUFFIX) $(PRIVATE_OTA_TYPE)
+	
+.PHONY: img-target-files
+
 endif
 
 ifneq ($(TARGET_PRODUCT),sdk)
@@ -1838,6 +1956,11 @@ $(INTERNAL_OTA_PACKAGE_TARGET): $(BUILT_TARGET_FILES_PACKAGE) $(DISTTOOLS)
 	   -s ./device/mediatek/build/releasetools/mt_ota_from_target_files \
 	   $(if $(OEM_OTA_CONFIG), -o $(OEM_OTA_CONFIG)) \
 	   $(BUILT_TARGET_FILES_PACKAGE) $@
+ifeq ($(strip $(ADUPS_FOTA_SUPPORT)), yes)
+	@echo "Package FotaPackage"
+	$(hide) chmod 777 packages/apps/AdupsFotaApp/getOtaPackage.sh
+	bash packages/apps/AdupsFotaApp/getOtaPackage.sh $(PRODUCT_OUT) $(KEY_CERT_PAIR) $(TARGET_DEVICE) $(HOST_LIBRARY_PATH) $(HOST_SHLIB_SUFFIX)
+endif
 
 .PHONY: otapackage
 otapackage: $(INTERNAL_OTA_PACKAGE_TARGET)

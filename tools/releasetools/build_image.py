@@ -282,6 +282,14 @@ def BuildImage(in_dir, prop_dict, out_file, target_out=None):
       build_command.extend(["-D", target_out])
     if "block_list" in prop_dict:
       build_command.extend(["-B", prop_dict["block_list"]])
+    #adupsfota begin
+    else:
+      print " --------- block_list not set !!! ------------ "
+      if re.search(r'system.img', out_file):
+        mappath = re.sub(r'system.img', 'system.map', out_file)
+        build_command.extend(["-B", mappath])
+        print "Using map file %s" % mappath
+    #adupsfota end
     build_command.extend(["-L", prop_dict["mount_point"]])
     if "selinux_fc" in prop_dict:
       build_command.append(prop_dict["selinux_fc"])
