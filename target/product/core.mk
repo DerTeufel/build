@@ -54,6 +54,7 @@ PRODUCT_PACKAGES += \
     TeleService \
     VpnDialogs \
     MmsService \
-    MMITestCn
+    MMITestCn \
+    NbHallWindow
 
 $(call inherit-product, $(SRC_TARGET_DIR)/product/core_base.mk)
